@@ -42,9 +42,11 @@ import org.apache.kafka.streams.kstream.Produced
 import org.apache.kafka.streams.kstream.ValueTransformerWithKey
 import org.apache.kafka.streams.kstream.ValueTransformerWithKeySupplier
 import org.apache.kafka.streams.processor.ProcessorContext
+import org.apache.kafka.streams.state.KeyValueIterator
 import org.apache.kafka.streams.state.KeyValueStore
 import org.apache.kafka.streams.state.Stores
 import org.apache.kafka.streams.test.ConsumerRecordFactory
+import org.junit.jupiter.api.Disabled
 import org.junit.jupiter.api.Test
 import sample.Dsl.Companion.STORE_MAPPING
 import java.nio.charset.Charset
@@ -52,9 +54,6 @@ import java.util.*
 
 typealias AggregationR = Either<List<RoutedToParent>, Option<Parent>>
 
-/*
- * Seems that there might be a bug in TestTopologyDriver as output records are not coming in the right order.
- */
 internal class AdvancedTopologyDriverTest {
 
     @Test
@@ -94,6 +93,7 @@ internal class AdvancedTopologyDriverTest {
     }
 
     @Test
+    @Disabled("output records come not in order as stated in TestTopologyDriver")
     fun `append a kid that refers to other parent`() {
         val kids = listOf(
             Child(TID2),
@@ -121,7 +121,30 @@ internal class AdvancedTopologyDriverTest {
     }
 
     @Test
-    fun `append late tracking point to master`() {
+    fun `append a kid that refers to other parent, check state store`() {
+        val kids = listOf(
+            Child(TID2),
+            Child(TID1, listOf(TID1, TID2))
+        )
+
+        val stateStore = aggregateAndLookAtStateStore(kids)
+
+        assertAll {
+            assertk.assert(stateStore[TID1]).isEqualTo(
+                Parent(
+                    TID1,
+                    listOf(
+                        Child(TID1, listOf(TID1, TID2)),
+                        Child(TID2)
+                    ),
+                    generation = 2
+                ).toOption().right()
+            )
+        }
+    }
+
+    @Test
+    fun `append late kid to master`() {
         val tp1 = Child(TID1, other = listOf(TID1, TID2))
         val tp2 = Child(TID2)
 
@@ -141,6 +164,7 @@ internal class AdvancedTopologyDriverTest {
     }
 
     @Test
+    @Disabled("output records come not in order as stated in TestTopologyDriver")
     fun `append additional to master once mapping is available`() {
         val tp1 = Child(TID1)
         val tp2 = Child(TID2)
@@ -153,10 +177,29 @@ internal class AdvancedTopologyDriverTest {
                 TID1 to Parent(
                     TID1,
                     listOf(tp1, tp3, Child(TID2)),
-                    generation = 2
+                    generation = 3
                 )
             )
             assertk.assert(parents.lastParent(TID2)).contains(TID2 to null)
+        }
+    }
+
+    @Test
+    fun `append additional to master once mapping is available, check state store`() {
+        val tp1 = Child(TID1)
+        val tp2 = Child(TID2)
+        val tp3 = Child(TID1, listOf(TID1, TID2, TID3))
+
+        val parents = aggregateAndLookAtStateStore(listOf(tp1, tp2, tp3))
+
+        assertAll {
+            assertk.assert(parents[TID1]).isEqualTo(
+                Parent(
+                    TID1,
+                    listOf(tp1, tp3, Child(TID2)),
+                    generation = 3
+                ).toOption().right()
+            )
         }
     }
 
@@ -180,6 +223,17 @@ internal class AdvancedTopologyDriverTest {
                 }
                 .orNull()
             }
+    }
+
+    private fun aggregateAndLookAtStateStore(children: List<Child>): Map<String, AggregationR> {
+        return MockedStreams.builder {
+            Dsl().create()
+        }.input(
+            Dsl.TOPIC_CHILD,
+            Serdes.String(),
+            Serdes.String(),
+            children.map { it.id to with(Child.encoder()) { it.encode().noSpaces() } }
+        ).stateTable(Dsl.STORE_PARENTS)
     }
 
     private fun List<Pair<String, Parent?>>.lastParent(id: String): Option<Pair<String, Parent?>> {
@@ -224,6 +278,14 @@ object MockedStreams {
                         .map { record -> record.key() to record.value() }
                         .toList()
                 }
+            }
+        }
+
+        fun <K, V> stateTable(name: String): Map<K, V> = withProcessedDriver { driver ->
+            driver.getKeyValueStore<K, V>(name).all().use { records: KeyValueIterator<K, V> ->
+                records.asSequence().map { kv ->
+                    kv.key to kv.value
+                }.toMap()
             }
         }
 

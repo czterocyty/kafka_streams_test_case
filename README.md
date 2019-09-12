@@ -1,4 +1,6 @@
-# Test case for TopologyTestDriver bug
+# Test case for TopologyTestDriver out of order output records
+
+[Kafka Stream discussion thread](https://lists.apache.org/thread.html/73bd0dc0dbdbad237757425c7bd3b6e721083fbd46c2bab29618ddd9@%3Cdev.kafka.apache.org%3E)
 
 Implemented in Kotlin, JVM 11 and against Kafka Streams 2.3.
 
